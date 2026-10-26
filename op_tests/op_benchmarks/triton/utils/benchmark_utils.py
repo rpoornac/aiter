@@ -404,13 +404,21 @@ def generate_rotating_buffers_pool(
     print_info: bool = False,
 ):
     per_set_bytes = 0
+    seen_storage_ptrs = set()
     for gen, fields in zip(gens, out_vals_keys):
         kwargs = run_input_generator(gen, fields)
-        per_set_bytes += sum(
-            v.numel() * v.element_size()
-            for v in kwargs.values()
-            if isinstance(v, torch.Tensor)
-        )
+        for v in kwargs.values():
+            if not isinstance(v, torch.Tensor):
+                continue
+            storage = v.untyped_storage()
+            ptr = storage.data_ptr()
+            # Aliased views (e.g. a reshape of another returned tensor) share
+            # backing storage; count it once, by its real size, not once per
+            # view, or pool sizing undercounts/overcounts the true footprint.
+            if ptr in seen_storage_ptrs:
+                continue
+            seen_storage_ptrs.add(ptr)
+            per_set_bytes += storage.nbytes()
     if per_set_bytes == 0:
         raise ValueError(
             "per_set_bytes=0, specify gens that generate tensors with size > 0"
